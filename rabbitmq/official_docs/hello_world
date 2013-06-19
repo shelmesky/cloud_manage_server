@@ -1,0 +1,167 @@
+介绍：
+RabbitMQ 是一个消息经纪人。它主要的目的很简单：接受并且发送消息。
+你可以想到一个邮局：当你把一封邮件放到发信箱的时候，你确定邮差先生最终会把信件送达到收件人。
+把RabbitMQ比喻为发信箱、邮局和邮差。
+
+RabbitMQ和邮局的主要区别是，RabbitMQ接受消息，存储并且转发二进制数据（消息），而不是用纸张。
+
+RabbitMQ中使用一些概念：
+
+1. 生产者 只是发送消息。一个发送消息的程序是一个生产者，用P来表示它。
+
+2. 队列 就像信箱一样。它位于RabbitMQ的内部。虽然消息流经过RabbitMQ和你的程序，但是他们只能被存储在队列中。
+一个队列没有任何限制，它可以存储任何数据，只要你乐意。它实质上是无限大小的缓存。
+多个生产者可以发送消息到一个队列中，多个消费者也可以从一个队列接收消息。
+
+3. 消费 就是接收的意思。一个消费者程序主要是等待并且接收数据。用C来表示它。
+
+注意：生产者，消费者，和消息经纪人，不要让它们在一台机器上。实际上大部分程序也不会这么做的。
+
+
+Hello World!
+(使用pika 0.95 python client)
+
+我们的hello world不会很复杂，让我们发送一个消息，接收并且在屏幕上打印它。要实现这个，我们需要两种程序：一个发送消息，
+另一个收到并且打印消息。
+
+我们的设计大体上看起来是这样：
+
+生产者发送消息到"hello"队列。消费者从队列接收消息。
+
+
+RabbitMQ的库
+RabbitMQ使用AMQP协议。要使用RabbitMQ你需要一个库，这个库理解协议本身并且也理解RabbitMQ。
+在pyhon的世界里，有一打可用的库去选择：
+
+py-amqplib
+txAMQP
+pika
+
+在此系列的教程中，我们使用pika。要安装它你可以使用pip包管理工具：
+
+$ sudo pip install pika=0.9.5
+
+上面的命令依赖pip和git-core这两个包，你可能需要首先安装它们。
+
+在Ubuntu上：
+
+$ sudo apt-get install python-pip git-core
+
+在Debian上：
+
+$ sudo apt-get install python-setuptools git-core
+$ sudo easy_install pip
+
+在Windows上：要安装easy_install，使用Windows Installer安装setuptools
+
+> easy_install pip
+> pip install pika==0.9.5
+
+发送
+
+
+我们的程序send.py会发送一个消息到队列中。但首先要做的是建立到RabbitMQ服务器的连接。
+
+#!/usr/bin/python
+connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+channel = connection.channel()
+
+现在已经建立了到localhost的连接。如果想连接到其他机器，我们只需要指定主机名或者IP地址。
+接下来， 在准备发送之前我们需要确定接收的队列是否存在。如果我们发送消息到一个不存在的位置，
+RabbitMQ只会丢弃消息（言下之意，它不会抛出错误）。
+所以建立一个接收消息的队列，它叫hello。
+
+channel.queue_decleare(queue='hello')
+
+现在我们可以发送消息了。我们的第一个消息只包含了一个字符串"hello rabbit"，然后我们要把它发送到 hello 队列中。
+
+在RabbitMQ中，你永远不能把消息直接发送到一个队列中，除非通过一个交换机(exchange)。
+但是现在不要被繁琐的细节所拖累，你可以在第三个说明中阅读到关于交换机的细节信息。
+我们现在只需要知道怎样用一个空字符串，定义一个交换机并使用它。
+这个空字符串定义的交换机很特殊，它允许指定消息将要发送到哪个队列中。
+队列的名字需要在routing_key中指定。
+
+channel.basic_publish(exchange='',
+                      routing_key='hello',
+                      body='Hello World!')
+print " [x] Sent 'Hello World!'"
+
+在退出程序之前，我们需要确定缓存已经被flush，而且消息已经达到RabbitMQ。
+我们可以以温柔的方式关闭连接，这样就能达到上面的目的：
+
+connection.close()
+
+
+接收：
+
+第二个程序receive.py会从队列中接收消息，并打印消息到屏幕上。
+
+再次重申，我们首先要连接到RabbitMQ服务器。负责连接的代码，在前面已经提到过，这里不再重复。
+
+下一步需要确保队列已经存在，就像前面提到的一样。使用queue_declare创建一个队列是正确的，我们可以多次运行
+它，但是最终只会创建一个队列。
+
+channel.queue_declare(queue='hello')
+
+你可能会问，已经在之前的代码中创建过了，为什么要再次创建队列。
+我们可以让自己确保队列已经存在。举例来说，我们在前面运行了send.py，但是我们不确定哪个程序是首先启动的。
+在这种情况下，好的习惯就是在两个程序中都重复一次创建队列的动作。
+
+
+列出存在的队列：
+
+你也许想要知道，RabbitMQ中存在多少队列，每个队列中又存在多少消息。
+可以使用rabbitmqctl这个命令（在特权用户下）：
+
+$ sudo rabbitmqctl list_queues
+Listing queues ...
+hello  0
+...done.
+
+(在windows中没有sudo)
+
+
+从队列中接收消息，就有一点复杂了。通过给队列指定一个回调函数，就可以做到。
+当接收到一个消息，Pika就会调用回调函数。在我们的例子中，这个回调函数答应消息中的内容到屏幕上。
+
+def callback(ch, method, properties, body):
+    print " [x] Received %r" % (body,)
+    
+接下来，我们需要告诉RabbitMQ这个回调函数需要从hello队列中接收消息：
+
+channel.basic_consume(callback,
+                queue='hello',
+                no_ack=True)
+
+想要让上面的代码运行成功，必须确保队列已经存在。幸运的是，我们有信心做到，
+因为已经在前面使用queue_declare创建了一个队列。
+
+no_ack这个参数会在稍后解释。
+
+最后，我们让程序进入到一个无限循环中，等到数据的到来并运行回调函数。
+
+print ' [*] Waiting for messages. To exit press CTRL+C'
+channel.start_consuming()
+
+
+放在一起来看：
+
+send.py完整的代码：
+
+
+receive.py完整的代码：
+
+现在我们可以在控制台运行程序了。首先用send.py发送一个消息：
+
+$ python send.py
+ [x] Sent 'Hello World!'
+ 
+生产者程序send.py会在每次运行之后退出。让我们来接收消息：
+ $ python receive.py
+ [*] Waiting for messages. To exit press CTRL+C
+ [x] Received 'Hello World!
+ 
+太棒了! 我们使用RabbitMQ发送了第一个消息。
+你也许注意到了，receive.py程序没有退出，它持续接收后面到来的消息。当然可以用Ctrl-C退出程序。
+
+我们学习了怎样使用一个命名的队列发送和接收消息，现在是时候学习如何创建一个简单的任务队列了。
